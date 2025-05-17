@@ -1,35 +1,59 @@
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-# inspired from the model.py script available in the discussion folder
+class VanillaVAE(nn.Module):
+    def __init__(self, in_channels=3, latent_dim=128):
+        super(VanillaVAE, self).__init__()
+        self.latent_dim = latent_dim
 
-class VAE(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim):
-        super(VAE, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3a = nn.Linear(hidden_dim, latent_dim)
-        self.fc3b = nn.Linear(hidden_dim, latent_dim)
 
-        self.fc4 = nn.Linear(latent_dim, hidden_dim)
-        self.fc5 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc6 = nn.Linear(hidden_dim, input_dim)
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, 32, 4, 2, 1),   
+            nn.ReLU(),
+            nn.Conv2d(32, 64, 4, 2, 1),        
+            nn.ReLU(),
+            nn.Conv2d(64, 128, 4, 2, 1),        
+            nn.ReLU(),
+            nn.Conv2d(128, 256, 4, 2, 1),         
+            nn.ReLU()
+        )
+        self.fc_mu = nn.Linear(256 * 4 * 4, latent_dim)
+        self.fc_logvar = nn.Linear(256 * 4 * 4, latent_dim)
 
-        self.relu = nn.ReLU()
+        self.decoder_input = nn.Linear(latent_dim, 256 * 4 * 4)
+
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, 4, 2, 1), 
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 4, 2, 1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 4, 2, 1),  
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, in_channels, 4, 2, 1),
+            nn.Sigmoid()  
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
     def encode(self, x):
-        h = self.relu(self.fc2(self.fc1(x)))
-        mu, sigma = self.fc3a(h), self.fc3b(h)
-        return mu, sigma
+        x = self.encoder(x)
+        x = x.view(x.size(0), -1)
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+        return mu, logvar
 
-    def decode(self, x):
-        h = self.relu(self.fc5(self.fc4(x)))
-        return torch.sigmoid(self.fc6(h))
-    
+    def decode(self, z):
+        x = self.decoder_input(z)
+        x = x.view(-1, 256, 4, 4)
+        x = self.decoder(x)
+        return x
+
     def forward(self, x):
-        mu, sigma = self.encode(x)
-        epsilon = torch.randn_like(sigma)
-        z_new = mu + sigma * epsilon
-        x_hat = self.decode(z_new)
-        return x_hat, mu, sigma
-    
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        x_recon = self.decode(z)
+        return x_recon, mu, logvar
